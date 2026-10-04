@@ -4,6 +4,7 @@ import (
 	"cpa-usage-keeper/internal/entities"
 	"cpa-usage-keeper/internal/repository"
 	"fmt"
+	"slices"
 	"testing"
 	"time"
 )
@@ -60,6 +61,46 @@ func TestArchiveRetentionCleanup(t *testing.T) {
 			again, err := repository.CleanupStorage(db, now, days)
 			if err != nil || again.UsageEventsArchiveDeleted != 0 {
 				t.Fatalf("repeat: %+v %v", again, err)
+			}
+		})
+	}
+}
+
+// 用真实存储序列化覆盖 UTC 小数秒及夏令时切换后的自然日边界。
+func TestArchiveRetentionPreservesCutoffDaySubseconds(t *testing.T) {
+	for _, zone := range []string{"UTC", "Asia/Shanghai", "America/New_York"} {
+		t.Run(zone, func(t *testing.T) {
+			location, err := time.LoadLocation(zone)
+			if err != nil {
+				t.Fatal(err)
+			}
+			previous := time.Local
+			time.Local = location
+			t.Cleanup(func() { time.Local = previous })
+			db := openTestDatabase(t)
+			// 2026-03-08 是纽约夏令时起始日；固定自然日而非 180*24h。
+			now := time.Date(2026, 9, 4, 4, 30, 0, 0, location)
+			cutoff := time.Date(2026, 3, 8, 0, 0, 0, 0, location)
+			offsets := []time.Duration{-time.Nanosecond, 0, time.Nanosecond, 500 * time.Millisecond, 23 * time.Hour}
+			for i, offset := range offsets {
+				row := entities.UsageEventArchive{ID: int64(i + 1), EventKey: fmt.Sprint(i), Timestamp: cutoff.Add(offset)}
+				if err := db.Create(&row).Error; err != nil {
+					t.Fatal(err)
+				}
+			}
+			result, err := repository.CleanupStorage(db, now, 180)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.UsageEventsArchiveDeleted != 1 {
+				t.Fatalf("deleted %d, want only the record before cutoff", result.UsageEventsArchiveDeleted)
+			}
+			var ids []int64
+			if err := db.Model(&entities.UsageEventArchive{}).Order("id").Pluck("id", &ids).Error; err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(ids, []int64{2, 3, 4, 5}) {
+				t.Fatalf("retained IDs %v, want [2 3 4 5]", ids)
 			}
 		})
 	}

@@ -126,7 +126,8 @@ func cleanupUsageEventArchive(db *gorm.DB, now time.Time, retentionDays int) (in
 	if retentionDays/366 > day.Year() {
 		return 0, nil
 	}
-	cutoff := timeutil.FormatStorageTime(day.AddDate(0, 0, -retentionDays))
+	// 存储时间按项目时区归一化；只比较日期，避免 UTC 的 Z 后缀让零点小数秒排在整秒之前。
+	cutoff := day.AddDate(0, 0, -retentionDays).Format("2006-01-02")
 	var deleted, afterID int64
 	for {
 		if err := databaseContext(db).Err(); err != nil {
