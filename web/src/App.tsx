@@ -3,8 +3,8 @@ import { useTranslation } from 'react-i18next';
 import './index.css';
 import './App.css';
 import './embed/cpamcEmbed.css';
-import { ApiError, appPath, clearEmbedSessionToken, getSession, login, loginWithCPAAPIKey } from './lib/api';
-import type { AuthRole, AuthSessionAPIKeySummary } from './lib/types';
+import { ApiError, appPath, clearEmbedSessionToken, getSession, login, loginWithCPAAPIKey, startOIDCLogin } from './lib/api';
+import type { AuthRole, AuthSessionAPIKeySummary, AuthSessionResponse } from './lib/types';
 import { AppFooter } from './components/AppFooter';
 import { isKeyViewerPath, type KeyViewerPath } from './features/key-viewer';
 import { KeyAnalysisPage } from './pages/KeyAnalysisPage';
@@ -57,6 +57,7 @@ function App() {
   const [keyViewerPath, setKeyViewerPath] = useState<KeyViewerPath>(getInitialKeyViewerPath);
   const [adminLoginError, setAdminLoginError] = useState('');
   const [apiKeyLoginError, setAPIKeyLoginError] = useState('');
+  const [oidcLoginEnabled, setOIDCLoginEnabled] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const clearUsageStats = useUsageStatsStore((state) => state.clearUsageStats);
   const isEmbeddedInCPAMC = isCPAMCEmbed();
@@ -69,8 +70,9 @@ function App() {
     setSessionAPIKey(undefined);
   }, [clearUsageStats]);
 
-  const applySession = useCallback((session: Awaited<ReturnType<typeof getSession>>) => {
+  const applySession = useCallback((session: AuthSessionResponse) => {
     if (!session.authenticated) {
+      setOIDCLoginEnabled(Boolean(session.oidc_login_enabled));
       clearSession();
       return;
     }
@@ -174,7 +176,7 @@ function App() {
   if (authState === 'checking') {
     page = <div className="app-checking" aria-busy="true" />;
   } else if (authState === 'unauthenticated') {
-    page = <LoginPage loading={submitting} adminError={adminLoginError} apiKeyError={apiKeyLoginError} onPasswordSubmit={handlePasswordLogin} onAPIKeySubmit={handleAPIKeyLogin} />;
+    page = <LoginPage loading={submitting} oidcEnabled={oidcLoginEnabled} adminError={adminLoginError} apiKeyError={apiKeyLoginError} onPasswordSubmit={handlePasswordLogin} onAPIKeySubmit={handleAPIKeyLogin} onOIDCLogin={startOIDCLogin} />;
   } else if (authRole === 'api_key_viewer') {
     page = keyViewerPath === '/key-analysis'
       ? <KeyAnalysisPage apiKey={sessionAPIKey} onNavigate={handleKeyViewerNavigate} onAuthRequired={clearSession} />
