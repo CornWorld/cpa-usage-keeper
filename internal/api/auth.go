@@ -140,7 +140,6 @@ func (h *authHandler) registerRoutes(router gin.IRoutes) {
 	router.POST("/api-key-login", h.apiKeyLogin)
 	router.GET("/oidc/login", h.oidcLogin)
 	router.GET("/oidc/callback", h.oidcCallback)
-	router.POST("/oidc/logout", h.oidcLogout)
 }
 
 func (h *authHandler) middleware() gin.HandlerFunc {
@@ -483,11 +482,6 @@ func (h *authHandler) oidcSuccessRedirect() string {
 		base = "/" + base
 	}
 	return base
-}
-
-// oidcLogout ends the relying-party session locally and optionally at the IdP.
-func (h *authHandler) oidcLogout(c *gin.Context) {
-	h.logout(c)
 }
 
 // oidcErrorRedirect builds the login-page redirect carrying an OIDC error hint.

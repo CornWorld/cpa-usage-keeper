@@ -32,11 +32,6 @@ type Config struct {
 	AllowedUsers []string
 }
 
-// Enabled reports whether the relying-party login is configured.
-func (c Config) Enabled() bool {
-	return c.Issuer != "" && c.ClientID != "" && c.ClientSecret != "" && c.RedirectURL != ""
-}
-
 // Identity is the verified end-user identity extracted from the ID token.
 type Identity struct {
 	Subject string
@@ -274,14 +269,6 @@ func newStateWithVerifier() (state, verifier string, err error) {
 func codeChallenge(verifier string) string {
 	digest := sha256.Sum256([]byte(verifier))
 	return base64.RawURLEncoding.EncodeToString(digest[:])
-}
-
-// AllowedUserCount reports the configured allowlist size (for tests/diagnostics).
-func (r *RP) AllowedUserCount() int {
-	if r == nil {
-		return 0
-	}
-	return len(r.config.AllowedUsers)
 }
 
 // ValidateRedirectURL checks that a configured redirect URL is absolute and https or loopback http.
