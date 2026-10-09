@@ -1,7 +1,5 @@
-//go:build smoke
-
-// OIDC RP end-to-end smoke test against an in-process mock IdP.
-// Run: go test -tags smoke ./internal/oidc/ -run TestSmokeRPFullFlow -v
+// OIDC RP end-to-end test against an in-process mock IdP: discovery, authorize,
+// PKCE token exchange, ID-token verification and single-use state handling.
 package oidc
 
 import (
@@ -113,7 +111,7 @@ func (m *mockIdP) handler(t *testing.T) http.Handler {
 	return mux
 }
 
-func TestSmokeRPFullFlow(t *testing.T) {
+func TestRPFullFlow(t *testing.T) {
 	idp := newMockIdP(t)
 	server := httptest.NewServer(idp.handler(t))
 	defer server.Close()
