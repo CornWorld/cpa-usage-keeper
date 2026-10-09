@@ -3,7 +3,7 @@
 import { act, type ComponentProps } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import App from '../App';
+import App, { readOIDCLoginError } from '../App';
 import { useUsageStatsStore } from '../stores/useUsageStatsStore';
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
@@ -24,9 +24,14 @@ vi.mock('../pages/UsagePage', () => ({
   ),
 }));
 vi.mock('../pages/LoginPage', () => ({
-  LoginPage: ({ onPasswordSubmit, onAPIKeySubmit }: ComponentProps<typeof import('../pages/LoginPage').LoginPage>) => (
+  LoginPage: ({ onPasswordSubmit, onAPIKeySubmit, adminError }: {
+    onPasswordSubmit: (password: string) => Promise<void>;
+    onAPIKeySubmit: (apiKey: string) => Promise<void>;
+    adminError?: string;
+  }) => (
     <><button data-password-login onClick={() => onPasswordSubmit('password')}>Password</button>
-      <button data-key-login onClick={() => onAPIKeySubmit('test-key')}>API Key</button></>
+      <button data-key-login onClick={() => onAPIKeySubmit('test-key')}>API Key</button>
+      <span data-admin-error>{adminError}</span></>
   ),
 }));
 vi.mock('../pages/KeyOverviewPage', () => ({
@@ -110,5 +115,23 @@ describe('App session and navigation', () => {
     await act(async () => root.render(<App />));
     await act(async () => container.querySelector<HTMLButtonElement>('[data-key-login]')!.click());
     expect(window.location.pathname + window.location.search).toBe('/cpa/key-overview?embed=cpamc');
+  });
+
+  it('shows the OIDC callback failure hint on the login page and consumes it from the URL', async () => {
+    window.history.replaceState(null, '', '/cpa/?oidc_error=login_failed');
+    api.getSession.mockResolvedValue({ authenticated: false });
+    await act(async () => root.render(<App />));
+    expect(container.querySelector('[data-admin-error]')!.textContent).toBe('auth.login_failed');
+    expect(window.location.pathname + window.location.search).toBe('/cpa/');
+  });
+});
+
+describe('readOIDCLoginError', () => {
+  it('maps callback reasons to login-page messages and ignores anything else', () => {
+    expect(readOIDCLoginError('?oidc_error=login_failed')).toBe('auth.login_failed');
+    expect(readOIDCLoginError('?oidc_error=invalid_callback')).toBe('auth.login_failed');
+    expect(readOIDCLoginError('?oidc_error=unexpected')).toBe('auth.login_failed');
+    expect(readOIDCLoginError('?other=1')).toBe('');
+    expect(readOIDCLoginError('')).toBe('');
   });
 });

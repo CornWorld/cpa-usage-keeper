@@ -49,13 +49,38 @@ export const shouldNormalizeRolePath = (
   isEmbeddedInCPAMC = false,
 ): boolean => currentPath !== getRoleTargetPath(role, currentPath, isEmbeddedInCPAMC);
 
+// The OIDC callback redirects failures back to the login page with a one-shot
+// ?oidc_error hint; map it to the login-page message shown on the admin tab.
+const OIDC_ERROR_KEYS: Record<string, string> = {
+  login_failed: 'auth.login_failed',
+  invalid_callback: 'auth.login_failed',
+};
+
+export const readOIDCLoginError = (search: string): string => {
+  const reason = new URLSearchParams(search).get('oidc_error');
+  if (!reason) return '';
+  return OIDC_ERROR_KEYS[reason] ?? 'auth.login_failed';
+};
+
+// stripOIDCErrorHint consumes the hint so a refresh or later navigation does not re-show it.
+const stripOIDCErrorHint = (): void => {
+  const params = new URLSearchParams(window.location.search);
+  if (!params.has('oidc_error')) return;
+  params.delete('oidc_error');
+  const query = params.toString();
+  window.history.replaceState(null, '', window.location.pathname + (query ? `?${query}` : '') + window.location.hash);
+};
+
 function App() {
   const { t } = useTranslation();
   const [authState, setAuthState] = useState<AuthState>('checking');
   const [authRole, setAuthRole] = useState<AuthRole | null>(null);
   const [sessionAPIKey, setSessionAPIKey] = useState<AuthSessionAPIKeySummary | undefined>();
   const [keyViewerPath, setKeyViewerPath] = useState<KeyViewerPath>(getInitialKeyViewerPath);
-  const [adminLoginError, setAdminLoginError] = useState('');
+  const [adminLoginError, setAdminLoginError] = useState(() => {
+    const key = readOIDCLoginError(window.location.search);
+    return key ? t(key) : '';
+  });
   const [apiKeyLoginError, setAPIKeyLoginError] = useState('');
   const [oidcLoginEnabled, setOIDCLoginEnabled] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -92,6 +117,10 @@ function App() {
       clearSession();
     });
   }, [clearSession, loadSession]);
+
+  useEffect(() => {
+    stripOIDCErrorHint();
+  }, []);
 
   useEffect(() => {
     notifyCPAMCEmbedReady();
