@@ -47,6 +47,19 @@ func TestOIDCLoginEnabledWithFullConfig(t *testing.T) {
 	}
 }
 
+// 非 TLS 的非回环 issuer 会让 discovery/JWKS 走明文通道，必须在启动时拒绝。
+func TestOIDCLoginRejectsNonTLSIssuer(t *testing.T) {
+	_, err := config.Load(config.LoadOptions{EnvFile: writeAuthConfig(t,
+		"LOGIN_PASSWORD=private-test-password\nAUTH_OIDC_ENABLED=true\n"+
+			"AUTH_OIDC_ISSUER=http://sso.example.com/realms/keeper\n"+
+			"AUTH_OIDC_CLIENT_ID=smoke-client\n"+
+			"AUTH_OIDC_CLIENT_SECRET=smoke-secret\n"+
+			"AUTH_OIDC_REDIRECT_URL=https://keeper.example.com/api/v1/auth/oidc/callback\n")})
+	if err == nil || !strings.Contains(err.Error(), "AUTH_OIDC_ISSUER") {
+		t.Fatalf("expected non-TLS issuer to be rejected, got %v", err)
+	}
+}
+
 func TestOIDCLoginParsesAllowlist(t *testing.T) {
 	cfg, err := config.Load(config.LoadOptions{EnvFile: writeAuthConfig(t,
 		oidcEnvBase+"AUTH_OIDC_ALLOWED_USERS=alice@example.com, bob@example.com\n")})

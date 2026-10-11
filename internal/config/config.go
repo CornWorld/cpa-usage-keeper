@@ -371,6 +371,9 @@ func Load(options LoadOptions) (*Config, error) {
 		if !cfg.AuthOIDCConfigured() {
 			return nil, fmt.Errorf("AUTH_OIDC_ISSUER, AUTH_OIDC_CLIENT_ID, AUTH_OIDC_CLIENT_SECRET and AUTH_OIDC_REDIRECT_URL are required when AUTH_OIDC_ENABLED is true")
 		}
+		if err := oidc.ValidateIssuerURL(cfg.AuthOIDCIssuer); err != nil {
+			return nil, err
+		}
 		if err := oidc.ValidateRedirectURL(cfg.AuthOIDCRedirectURL); err != nil {
 			return nil, err
 		}

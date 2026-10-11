@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -21,6 +22,9 @@ const (
 	stateTTL = 5 * time.Minute
 	// stateMaxEntries bounds memory usage for abandoned logins.
 	stateMaxEntries = 1024
+	// discoveryRetryInterval bounds how long a failed discovery is cached before retrying,
+	// so an outage or misconfiguration does not turn every login into an IdP request.
+	discoveryRetryInterval = 30 * time.Second
 )
 
 // Config holds the validated OIDC relying-party settings.
@@ -36,7 +40,10 @@ type Config struct {
 type Identity struct {
 	Subject string
 	Email   string
-	Name    string
+	// EmailVerified reports whether the IdP asserts ownership of the email claim;
+	// allowlist entries that match by email require it.
+	EmailVerified bool
+	Name          string
 }
 
 // LoginResult carries the redirect target for starting the browser flow.
@@ -93,8 +100,12 @@ func (r *RP) refreshProvider(ctx context.Context) (*provider, error) {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.provider != nil && r.providerErr == nil && time.Since(r.providerAt) < time.Hour {
+	if r.provider != nil && r.providerErr == nil && r.now().Sub(r.providerAt) < time.Hour {
 		return r.provider, nil
+	}
+	// Serve the cached failure for a bounded interval so outages do not hammer the IdP.
+	if r.providerErr != nil && r.now().Sub(r.providerAt) < discoveryRetryInterval {
+		return nil, r.providerErr
 	}
 	oidcProvider, err := oidc.NewProvider(ctx, r.config.Issuer)
 	if err != nil {
@@ -163,9 +174,10 @@ func (r *RP) Callback(ctx context.Context, state, code string) (*CallbackResult,
 		return nil, fmt.Errorf("verify oidc id token: %w", err)
 	}
 	var claims struct {
-		Sub   string `json:"sub"`
-		Email string `json:"email"`
-		Name  string `json:"name"`
+		Sub           string          `json:"sub"`
+		Email         string          `json:"email"`
+		EmailVerified json.RawMessage `json:"email_verified"`
+		Name          string          `json:"name"`
 	}
 	if err := idToken.Claims(&claims); err != nil {
 		return nil, fmt.Errorf("decode oidc id token claims: %w", err)
@@ -173,7 +185,12 @@ func (r *RP) Callback(ctx context.Context, state, code string) (*CallbackResult,
 	if strings.TrimSpace(claims.Sub) == "" {
 		return nil, errors.New("oidc id token missing subject claim")
 	}
-	identity := Identity{Subject: claims.Sub, Email: strings.TrimSpace(claims.Email), Name: strings.TrimSpace(claims.Name)}
+	identity := Identity{
+		Subject:       claims.Sub,
+		Email:         strings.TrimSpace(claims.Email),
+		EmailVerified: parseEmailVerified(claims.EmailVerified),
+		Name:          strings.TrimSpace(claims.Name),
+	}
 	if allowed := r.config.AllowedUsers; len(allowed) > 0 && !identityAllowed(identity, allowed) {
 		return nil, errors.New("oidc identity is not in the allowlist")
 	}
@@ -181,6 +198,8 @@ func (r *RP) Callback(ctx context.Context, state, code string) (*CallbackResult,
 }
 
 // identityAllowed matches subject or email (case-insensitive) against the allowlist.
+// Email entries only match when the IdP asserts email_verified, so an attacker
+// controlling the email claim cannot claim an allowlisted address.
 func identityAllowed(identity Identity, allowed []string) bool {
 	normalized := make([]string, 0, len(allowed))
 	for _, entry := range allowed {
@@ -188,18 +207,29 @@ func identityAllowed(identity Identity, allowed []string) bool {
 			normalized = append(normalized, entry)
 		}
 	}
-	candidates := []string{strings.ToLower(identity.Subject), strings.ToLower(identity.Email)}
-	for _, candidate := range candidates {
-		if candidate == "" {
-			continue
+	subject := strings.ToLower(identity.Subject)
+	email := strings.ToLower(identity.Email)
+	for _, entry := range normalized {
+		if subject != "" && entry == subject {
+			return true
 		}
-		for _, entry := range normalized {
-			if entry == candidate {
-				return true
-			}
+		if identity.EmailVerified && email != "" && entry == email {
+			return true
 		}
 	}
 	return false
+}
+
+// parseEmailVerified accepts the standard boolean form plus the string form
+// ("true"/"1") some providers emit; missing or malformed claims mean unverified.
+func parseEmailVerified(raw json.RawMessage) bool {
+	trimmed := strings.Trim(strings.TrimSpace(string(raw)), `"`)
+	switch trimmed {
+	case "true", "1":
+		return true
+	default:
+		return false
+	}
 }
 
 // storeState remembers a pending login with TTL and bounded capacity.
@@ -271,14 +301,30 @@ func codeChallenge(verifier string) string {
 	return base64.RawURLEncoding.EncodeToString(digest[:])
 }
 
+// ValidateIssuerURL checks that an OIDC issuer URL is absolute and https or loopback http,
+// so discovery and JWKS cannot be intercepted on a plaintext non-loopback hop.
+func ValidateIssuerURL(raw string) error {
+	if err := validateHTTPSURL(raw); err != nil {
+		return fmt.Errorf("AUTH_OIDC_ISSUER %w", err)
+	}
+	return nil
+}
+
 // ValidateRedirectURL checks that a configured redirect URL is absolute and https or loopback http.
 func ValidateRedirectURL(raw string) error {
+	if err := validateHTTPSURL(raw); err != nil {
+		return fmt.Errorf("AUTH_OIDC_REDIRECT_URL %w", err)
+	}
+	return nil
+}
+
+func validateHTTPSURL(raw string) error {
 	parsed, err := url.Parse(raw)
 	if err != nil {
-		return fmt.Errorf("AUTH_OIDC_REDIRECT_URL is invalid: %w", err)
+		return fmt.Errorf("is invalid: %w", err)
 	}
 	if !parsed.IsAbs() || parsed.Host == "" {
-		return fmt.Errorf("AUTH_OIDC_REDIRECT_URL must be an absolute URL")
+		return errors.New("must be an absolute URL")
 	}
 	if parsed.Scheme == "https" {
 		return nil
@@ -289,5 +335,5 @@ func ValidateRedirectURL(raw string) error {
 			return nil
 		}
 	}
-	return fmt.Errorf("AUTH_OIDC_REDIRECT_URL must use https (http allowed only for loopback)")
+	return errors.New("must use https (http allowed only for loopback)")
 }

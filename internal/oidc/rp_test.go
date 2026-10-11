@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -26,6 +27,8 @@ type mockIdP struct {
 	mu       sync.Mutex
 	codes    map[string]string // code -> subject
 	lastCode string
+	// emailVerified controls the email_verified claim: nil omits it entirely.
+	emailVerified any
 }
 
 func newMockIdP(t *testing.T) *mockIdP {
@@ -98,6 +101,11 @@ func (m *mockIdP) handler(t *testing.T) http.Handler {
 			"email": "user@example.com",
 			"name":  "Smoke User",
 		}
+		m.mu.Lock()
+		if m.emailVerified != nil {
+			payload["email_verified"] = m.emailVerified
+		}
+		m.mu.Unlock()
 		signed, err := signIDToken(m.key, header, payload)
 		if err != nil {
 			t.Errorf("sign id token: %v", err)
@@ -116,6 +124,7 @@ func TestRPFullFlow(t *testing.T) {
 	server := httptest.NewServer(idp.handler(t))
 	defer server.Close()
 	idp.baseURL = server.URL
+	idp.emailVerified = true
 
 	rp := NewRP(Config{
 		Issuer:       server.URL,
@@ -167,6 +176,9 @@ func TestRPFullFlow(t *testing.T) {
 	if result.Identity.Email != "user@example.com" {
 		t.Fatalf("email = %q, want user@example.com", result.Identity.Email)
 	}
+	if !result.Identity.EmailVerified {
+		t.Fatal("email_verified = false, want true")
+	}
 	if result.Identity.Name != "Smoke User" {
 		t.Fatalf("name = %q, want Smoke User", result.Identity.Name)
 	}
@@ -191,6 +203,150 @@ func extractQueryParam(t *testing.T, query, key string) string {
 		}
 	}
 	return ""
+}
+
+// startMockIdP runs the handler in-process and points the mock at it.
+func startMockIdP(t *testing.T, idp *mockIdP) string {
+	t.Helper()
+	server := httptest.NewServer(idp.handler(t))
+	t.Cleanup(server.Close)
+	idp.baseURL = server.URL
+	return server.URL
+}
+
+// loginAndCallback drives Login + code issuance and returns the Callback outcome.
+func loginAndCallback(t *testing.T, rp *RP, idp *mockIdP) (*CallbackResult, error) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	login, err := rp.Login(ctx)
+	if err != nil {
+		t.Fatalf("login: %v", err)
+	}
+	query := strings.SplitN(login.AuthorizationURL, "?", 2)[1]
+	state := extractQueryParam(t, query, "state")
+	idp.mu.Lock()
+	code := fmt.Sprintf("allowlist-code-%d", time.Now().UnixNano())
+	idp.codes[code] = "user-123"
+	idp.mu.Unlock()
+	return rp.Callback(ctx, state, code)
+}
+
+// issueResult issues a callback for user-123 with the given allowlist; the caller
+// configures idp.emailVerified beforehand.
+func issueResult(t *testing.T, idp *mockIdP, allowed []string) (*CallbackResult, error) {
+	rp := NewRP(Config{
+		Issuer:       startMockIdP(t, idp),
+		ClientID:     "smoke-client",
+		ClientSecret: "smoke-secret",
+		RedirectURL:  "https://keeper.example.com/api/v1/auth/oidc/callback",
+		AllowedUsers: allowed,
+	})
+	return loginAndCallback(t, rp, idp)
+}
+
+// TestRPCallbackAllowlistRequiresVerifiedEmail pins the ownership check: an
+// allowlist entry matching the email claim only authorizes when the IdP asserts
+// email_verified; subject entries stay independent of the email claim.
+func TestRPCallbackAllowlistRequiresVerifiedEmail(t *testing.T) {
+	t.Run("email allowlist rejects unverified email", func(t *testing.T) {
+		idp := newMockIdP(t)
+		_, err := issueResult(t, idp, []string{"user@example.com"})
+		if err == nil || !strings.Contains(err.Error(), "not in the allowlist") {
+			t.Fatalf("unverified email must not satisfy the email allowlist, got %v", err)
+		}
+	})
+
+	t.Run("email allowlist accepts verified email string claim", func(t *testing.T) {
+		idp := newMockIdP(t)
+		idp.emailVerified = "true" // some providers emit strings
+		result, err := issueResult(t, idp, []string{"user@example.com"})
+		if err != nil {
+			t.Fatalf("verified email must satisfy the email allowlist: %v", err)
+		}
+		if result.Identity.Subject != "user-123" {
+			t.Fatalf("subject = %q, want user-123", result.Identity.Subject)
+		}
+	})
+
+	t.Run("subject allowlist ignores unverified email", func(t *testing.T) {
+		idp := newMockIdP(t)
+		result, err := issueResult(t, idp, []string{"user-123"})
+		if err != nil {
+			t.Fatalf("subject allowlist must not depend on email claims: %v", err)
+		}
+		if result.Identity.EmailVerified {
+			t.Fatal("unverified email must not be reported as verified")
+		}
+	})
+}
+
+// TestRPDiscoveryFailureCached pins the bounded retry: a failed discovery is
+// served from cache for discoveryRetryInterval instead of hammering the IdP.
+func TestRPDiscoveryFailureCached(t *testing.T) {
+	var hits int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		http.Error(w, "discovery broken", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	base := time.Now()
+	rp := NewRP(Config{
+		Issuer:       server.URL,
+		ClientID:     "smoke-client",
+		ClientSecret: "smoke-secret",
+		RedirectURL:  "https://keeper.example.com/api/v1/auth/oidc/callback",
+	})
+	rp.now = func() time.Time { return base }
+	ctx := context.Background()
+
+	if _, err := rp.Login(ctx); err == nil {
+		t.Fatal("expected discovery failure")
+	}
+	if got := atomic.LoadInt32(&hits); got != 1 {
+		t.Fatalf("discovery hits = %d, want 1", got)
+	}
+
+	// Immediate retry must be served from cache without touching the IdP.
+	if _, err := rp.Login(ctx); err == nil {
+		t.Fatal("expected cached discovery failure")
+	}
+	if got := atomic.LoadInt32(&hits); got != 1 {
+		t.Fatalf("cached retry hit the IdP: hits = %d, want 1", got)
+	}
+
+	// After the bounded interval the RP retries discovery.
+	rp.now = func() time.Time { return base.Add(discoveryRetryInterval + time.Second) }
+	if _, err := rp.Login(ctx); err == nil {
+		t.Fatal("expected retried discovery failure")
+	}
+	if got := atomic.LoadInt32(&hits); got != 2 {
+		t.Fatalf("retry hits = %d, want 2", got)
+	}
+}
+
+func TestValidateIssuerURL(t *testing.T) {
+	cases := []struct {
+		raw     string
+		wantErr bool
+	}{
+		{"https://sso.example.com/realms/keeper", false},
+		{"http://localhost:8080", false},
+		{"http://127.0.0.1:9999", false},
+		{"http://sso.example.com", true},
+		{"/relative/path", true},
+		{"", true},
+	}
+	for _, tc := range cases {
+		err := ValidateIssuerURL(tc.raw)
+		if (err != nil) != tc.wantErr {
+			t.Fatalf("ValidateIssuerURL(%q) error = %v, wantErr %v", tc.raw, err, tc.wantErr)
+		}
+		if err != nil && !strings.Contains(err.Error(), "AUTH_OIDC_ISSUER") {
+			t.Fatalf("ValidateIssuerURL(%q) error should name AUTH_OIDC_ISSUER, got %q", tc.raw, err)
+		}
+	}
 }
 
 // signIDToken signs a compact JWS with RS256 using go-jose.

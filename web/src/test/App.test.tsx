@@ -24,14 +24,17 @@ vi.mock('../pages/UsagePage', () => ({
   ),
 }));
 vi.mock('../pages/LoginPage', () => ({
-  LoginPage: ({ onPasswordSubmit, onAPIKeySubmit, adminError }: {
+  LoginPage: ({ onPasswordSubmit, onAPIKeySubmit, adminError, oidcEnabled, onOIDCLogin }: {
     onPasswordSubmit: (password: string) => Promise<void>;
     onAPIKeySubmit: (apiKey: string) => Promise<void>;
     adminError?: string;
+    oidcEnabled?: boolean;
+    onOIDCLogin?: () => void;
   }) => (
     <><button data-password-login onClick={() => onPasswordSubmit('password')}>Password</button>
       <button data-key-login onClick={() => onAPIKeySubmit('test-key')}>API Key</button>
-      <span data-admin-error>{adminError}</span></>
+      <span data-admin-error>{adminError}</span>
+      {oidcEnabled && onOIDCLogin ? <button data-sso-login onClick={onOIDCLogin}>SSO</button> : null}</>
   ),
 }));
 vi.mock('../pages/KeyOverviewPage', () => ({
@@ -123,6 +126,21 @@ describe('App session and navigation', () => {
     await act(async () => root.render(<App />));
     expect(container.querySelector('[data-admin-error]')!.textContent).toBe('auth.login_failed');
     expect(window.location.pathname + window.location.search).toBe('/cpa/');
+  });
+
+  it('shows the SSO button from an authenticated response and keeps it after expiry', async () => {
+    api.getSession.mockResolvedValue({ authenticated: true, role: 'admin', oidc_login_enabled: true });
+    await act(async () => root.render(<App />));
+    expect(container.querySelector('[data-sso-login]')).toBeNull();
+    await act(async () => container.querySelector<HTMLButtonElement>('[data-expire]')!.click());
+    expect(container.querySelector('[data-sso-login]')).not.toBeNull();
+  });
+
+  it('hides the SSO button inside CPAMC embeds', async () => {
+    window.history.replaceState(null, '', '/cpa/?embed=cpamc');
+    api.getSession.mockResolvedValue({ authenticated: false, oidc_login_enabled: true });
+    await act(async () => root.render(<App />));
+    expect(container.querySelector('[data-sso-login]')).toBeNull();
   });
 });
 

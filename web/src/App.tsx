@@ -96,8 +96,10 @@ function App() {
   }, [clearUsageStats]);
 
   const applySession = useCallback((session: AuthSessionResponse) => {
+    // OIDC capability rides on every session response, so the SSO button survives
+    // session expiry/logout paths that clear the session without a refetch.
+    setOIDCLoginEnabled(Boolean(session.oidc_login_enabled));
     if (!session.authenticated) {
-      setOIDCLoginEnabled(Boolean(session.oidc_login_enabled));
       clearSession();
       return;
     }
@@ -205,7 +207,9 @@ function App() {
   if (authState === 'checking') {
     page = <div className="app-checking" aria-busy="true" />;
   } else if (authState === 'unauthenticated') {
-    page = <LoginPage loading={submitting} oidcEnabled={oidcLoginEnabled} adminError={adminLoginError} apiKeyError={apiKeyLoginError} onPasswordSubmit={handlePasswordLogin} onAPIKeySubmit={handleAPIKeyLogin} onOIDCLogin={startOIDCLogin} />;
+    // OIDC login is an admin bypass for the standalone app; embeds would lose the
+    // embed context (navigation without ?embed=cpamc, standard cookie lane).
+    page = <LoginPage loading={submitting} oidcEnabled={oidcLoginEnabled && !isEmbeddedInCPAMC} adminError={adminLoginError} apiKeyError={apiKeyLoginError} onPasswordSubmit={handlePasswordLogin} onAPIKeySubmit={handleAPIKeyLogin} onOIDCLogin={startOIDCLogin} />;
   } else if (authRole === 'api_key_viewer') {
     page = keyViewerPath === '/key-analysis'
       ? <KeyAnalysisPage apiKey={sessionAPIKey} onNavigate={handleKeyViewerNavigate} onAuthRequired={clearSession} />
