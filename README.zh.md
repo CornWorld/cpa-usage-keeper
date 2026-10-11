@@ -464,7 +464,8 @@ cp .env.example .env
 | `AUTH_OIDC_CLIENT_ID` | 启用 OIDC 时必填 | - | 在 IdP 注册的 confidential client ID |
 | `AUTH_OIDC_CLIENT_SECRET` | 启用 OIDC 时必填 | - | OIDC confidential client 的密钥 |
 | `AUTH_OIDC_REDIRECT_URL` | 启用 OIDC 时必填 | - | OIDC 回调地址，需与 IdP client 注册一致 |
-| `AUTH_OIDC_ALLOWED_USERS` | 否 | 空 | 允许通过 OIDC 登录的邮箱或 subject 白名单，逗号分隔；留空表示不限制 |
+| `AUTH_OIDC_ALLOW_INSECURE_ISSUER` | 否 | `false` | 允许 `AUTH_OIDC_ISSUER` 使用非回环明文 http；仅在可信网络下开启（此时 discovery/JWKS 走明文通道） |
+| `AUTH_OIDC_ALLOWED_USERS` | 否 | 空 | 允许通过 OIDC 登录的邮箱或 subject 白名单，逗号分隔；留空表示不限制。按邮箱匹配要求 IdP 断言 `email_verified`，建议优先使用 subject |
 | `API_KEY_VIEWER_LOCAL_RANKING_ENABLED` | 否 | `false` | 允许 API Key 登录用户只读查看本地排行；Community 排行始终只读 |
 
 OIDC 登录走标准 Authorization Code + PKCE 流程。配置好 IdP 后，登录页会多出一个「使用 SSO 登录」按钮，密码登录照旧可用；启用 OIDC 要求 `AUTH_ENABLED=true`。

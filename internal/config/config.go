@@ -119,6 +119,8 @@ type Config struct {
 	AuthOIDCRedirectURL string
 	// AuthOIDCAllowedUsers 是允许登录的邮箱/subject 白名单；空表示不限制。
 	AuthOIDCAllowedUsers []string
+	// AuthOIDCAllowInsecureIssuer 允许 AUTH_OIDC_ISSUER 使用非回环明文 http；仅供内网可信 IdP。
+	AuthOIDCAllowInsecureIssuer bool
 }
 
 // AuthOIDCConfigured reports whether all required OIDC fields are present.
@@ -270,6 +272,10 @@ func Load(options LoadOptions) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	authOIDCAllowInsecureIssuer, err := getBool("AUTH_OIDC_ALLOW_INSECURE_ISSUER", false)
+	if err != nil {
+		return nil, err
+	}
 	trustedProxyCIDRs, err := getCIDRs("TRUSTED_PROXY_CIDRS")
 	if err != nil {
 		return nil, err
@@ -341,6 +347,7 @@ func Load(options LoadOptions) (*Config, error) {
 		LoginPassword:                   strings.TrimSpace(os.Getenv("LOGIN_PASSWORD")),
 		AuthSessionTTL:                  authSessionTTL,
 		AuthOIDCEnabled:                 authOIDCEnabled,
+		AuthOIDCAllowInsecureIssuer:     authOIDCAllowInsecureIssuer,
 		AuthOIDCIssuer:                  strings.TrimSpace(os.Getenv("AUTH_OIDC_ISSUER")),
 		AuthOIDCClientID:                strings.TrimSpace(os.Getenv("AUTH_OIDC_CLIENT_ID")),
 		AuthOIDCClientSecret:            strings.TrimSpace(os.Getenv("AUTH_OIDC_CLIENT_SECRET")),
@@ -371,7 +378,7 @@ func Load(options LoadOptions) (*Config, error) {
 		if !cfg.AuthOIDCConfigured() {
 			return nil, fmt.Errorf("AUTH_OIDC_ISSUER, AUTH_OIDC_CLIENT_ID, AUTH_OIDC_CLIENT_SECRET and AUTH_OIDC_REDIRECT_URL are required when AUTH_OIDC_ENABLED is true")
 		}
-		if err := oidc.ValidateIssuerURL(cfg.AuthOIDCIssuer); err != nil {
+		if err := oidc.ValidateIssuerURL(cfg.AuthOIDCIssuer, cfg.AuthOIDCAllowInsecureIssuer); err != nil {
 			return nil, err
 		}
 		if err := oidc.ValidateRedirectURL(cfg.AuthOIDCRedirectURL); err != nil {

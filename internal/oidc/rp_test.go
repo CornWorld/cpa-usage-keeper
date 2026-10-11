@@ -328,23 +328,30 @@ func TestRPDiscoveryFailureCached(t *testing.T) {
 
 func TestValidateIssuerURL(t *testing.T) {
 	cases := []struct {
-		raw     string
-		wantErr bool
+		raw      string
+		insecure bool
+		wantErr  bool
 	}{
-		{"https://sso.example.com/realms/keeper", false},
-		{"http://localhost:8080", false},
-		{"http://127.0.0.1:9999", false},
-		{"http://sso.example.com", true},
-		{"/relative/path", true},
-		{"", true},
+		{"https://sso.example.com/realms/keeper", false, false},
+		{"http://localhost:8080", false, false},
+		{"http://127.0.0.1:9999", false, false},
+		{"http://sso.example.com", false, true},
+		{"/relative/path", false, true},
+		{"", false, true},
+		// allowInsecure 只放宽 https 要求，仍然要求绝对 http(s) 地址。
+		{"http://sso.example.com", true, false},
+		{"https://sso.example.com", true, false},
+		{"/relative/path", true, true},
+		{"ftp://sso.example.com", true, true},
+		{"", true, true},
 	}
 	for _, tc := range cases {
-		err := ValidateIssuerURL(tc.raw)
+		err := ValidateIssuerURL(tc.raw, tc.insecure)
 		if (err != nil) != tc.wantErr {
-			t.Fatalf("ValidateIssuerURL(%q) error = %v, wantErr %v", tc.raw, err, tc.wantErr)
+			t.Fatalf("ValidateIssuerURL(%q, insecure=%v) error = %v, wantErr %v", tc.raw, tc.insecure, err, tc.wantErr)
 		}
 		if err != nil && !strings.Contains(err.Error(), "AUTH_OIDC_ISSUER") {
-			t.Fatalf("ValidateIssuerURL(%q) error should name AUTH_OIDC_ISSUER, got %q", tc.raw, err)
+			t.Fatalf("ValidateIssuerURL(%q, insecure=%v) error should name AUTH_OIDC_ISSUER, got %q", tc.raw, tc.insecure, err)
 		}
 	}
 }

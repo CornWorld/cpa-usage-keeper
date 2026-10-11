@@ -60,6 +60,23 @@ func TestOIDCLoginRejectsNonTLSIssuer(t *testing.T) {
 	}
 }
 
+// 逃生门:显式开启后允许内网明文 http issuer,但仍然要求绝对 http(s) 地址。
+func TestOIDCLoginAllowsInsecureIssuerWhenOptedIn(t *testing.T) {
+	cfg, err := config.Load(config.LoadOptions{EnvFile: writeAuthConfig(t,
+		"LOGIN_PASSWORD=private-test-password\nAUTH_OIDC_ENABLED=true\n"+
+			"AUTH_OIDC_ALLOW_INSECURE_ISSUER=true\n"+
+			"AUTH_OIDC_ISSUER=http://sso.example.com/realms/keeper\n"+
+			"AUTH_OIDC_CLIENT_ID=smoke-client\n"+
+			"AUTH_OIDC_CLIENT_SECRET=smoke-secret\n"+
+			"AUTH_OIDC_REDIRECT_URL=https://keeper.example.com/api/v1/auth/oidc/callback\n")})
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if !cfg.AuthOIDCAllowInsecureIssuer {
+		t.Fatal("expected insecure issuer opt-in to be recorded")
+	}
+}
+
 func TestOIDCLoginParsesAllowlist(t *testing.T) {
 	cfg, err := config.Load(config.LoadOptions{EnvFile: writeAuthConfig(t,
 		oidcEnvBase+"AUTH_OIDC_ALLOWED_USERS=alice@example.com, bob@example.com\n")})

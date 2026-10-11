@@ -303,7 +303,19 @@ func codeChallenge(verifier string) string {
 
 // ValidateIssuerURL checks that an OIDC issuer URL is absolute and https or loopback http,
 // so discovery and JWKS cannot be intercepted on a plaintext non-loopback hop.
-func ValidateIssuerURL(raw string) error {
+// allowInsecure relaxes the https requirement for plain-http IdPs on trusted networks,
+// while still requiring an absolute http(s) URL.
+func ValidateIssuerURL(raw string, allowInsecure bool) error {
+	if allowInsecure {
+		parsed, err := url.Parse(raw)
+		if err != nil {
+			return fmt.Errorf("AUTH_OIDC_ISSUER is invalid: %w", err)
+		}
+		if !parsed.IsAbs() || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+			return errors.New("AUTH_OIDC_ISSUER must be an absolute http(s) URL")
+		}
+		return nil
+	}
 	if err := validateHTTPSURL(raw); err != nil {
 		return fmt.Errorf("AUTH_OIDC_ISSUER %w", err)
 	}
