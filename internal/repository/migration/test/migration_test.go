@@ -96,6 +96,7 @@ func TestOrderedMigrationsPreservesExecutionOrder(t *testing.T) {
 		"20260925_limit_latency_sample_points",
 		// OIDC 登录引入 source=oidc；数据归一迁移必须位于所有 auth_sessions 结构迁移之后。
 		"20261006_backfill_auth_session_oidc_source",
+		"20261008_usage_event_trace_metadata",
 	}
 	assertStringSlicesEqual(t, want, got)
 }
